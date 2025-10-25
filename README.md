@@ -1,5 +1,4 @@
-# 🩺 AutoRTDose
-<sub><em>A 3D Transformer Framework for Automated Radiotherapy Segmentation and Dose Distribution Prediction</em></sub>
+# 🩺 AutoRTDose: A _3D_ Transformer Framework for Automated Radiotherapy Segmentation and Dose Distribution Prediction
   
 AutoRTDose is a deep learning framework designed to automate the process of radiotherapy dose distribution prediction and anatomical structure segmentation. Built upon a 3D convolution–transformer hybrid architecture, the model leverages spatial attention and contextual encoding to capture both anatomical and dosimetric correlations from volumetric patient data.
 
