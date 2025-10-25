@@ -1,0 +1,19 @@
+# Core scientific stack
+numpy==1.24.1
+scipy==1.10.0
+pandas==1.5.3
+scikit-learn==1.2.1
+h5py==3.8.0
+tqdm==4.64.1
+timm==0.9.16
+
+# Visualisation and notebooks
+matplotlib==3.6.3
+seaborn==0.12.2
+jupyter==1.0.0
+
+# Utilities and dev tools
+more_itertools==9.0.0
+black==22.12.0
+isort==5.11.4
+pylint==2.15.10

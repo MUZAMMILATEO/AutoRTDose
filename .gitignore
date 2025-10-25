@@ -1,0 +1,26 @@
+# Ignore the dataset folder
+provided-data/
+transformed-data/
+overlaid-data/
+results/
+submissions/
+
+# Model checkpoints
+3DConvTransformer/pvt_v2_b3.pth
+
+# Python cache and logs
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+# Virtual environments
+venv/
+.env/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
