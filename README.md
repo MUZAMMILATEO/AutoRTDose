@@ -1,17 +1,12 @@
-# OpenKBP Grand Challenge 
-
-![](read-me-images/aapm.png)
+# 🩺 AutoRTDose
+*A 3D Transformer Framework for Automated Radiotherapy Segmentation and Dose Distribution Prediction*
   
-The _open-kbp_ repository provides code that was intended to help get participants started with developing dose prediction models for the OpenKBP Challenge, which is summarized in our [paper](https://aapm.onlinelibrary.wiley.com/doi/epdf/10.1002/mp.14845). This repository has been repurposed to provide our community with an open framework for developing dose prediction methods. Note that researchers who are interested in developing their own plan optimization methods should refer to the [open-kbp-opt repository](https://github.com/ababier/open-kbp-opt).
+AutoRTDose is a deep learning framework designed to automate the process of radiotherapy dose distribution prediction and anatomical structure segmentation. Built upon a 3D convolution–transformer hybrid architecture, the model leverages spatial attention and contextual encoding to capture both anatomical and dosimetric correlations from volumetric patient data.
+
+This framework aims to accelerate clinical radiotherapy planning by reducing manual contouring time and improving dose accuracy, offering a scalable and reproducible solution for next-generation, AI-assisted treatment planning.
 
  ![](read-me-images/pipeline.png)
 
-**Advice**: The repository can be used on either a local machine or in the cloud (for free) using [Google Colab](https://colab.research.google.com). Google Colab is a great way to compete in OpenKBP without putting a burden on your existing hardware. The service provides high-quality CPUs and GPUs for free, however, your sessions are limited to consecutive 12 hours [[Frequently asked questions]](https://research.google.com/colaboratory/faq.html). 
-
-## Citation
-Please use our paper as the citation for this dataset or code repository:
-
-A. Babier, B. Zhang, R. Mahmood, K.L. Moore, T.G. Purdie, A.L. McNiven, T.C.Y. Chan, "[OpenKBP: The open-access knowledge-based planning grand challenge and dataset](https://aapm.onlinelibrary.wiley.com/doi/epdf/10.1002/mp.14845)," _Medical Physics_, Vol. 48, pp. 5549-5561, 2021.
 
 # Table of Contents
 - [Data](#data)
