@@ -1,218 +1,206 @@
-import sys
-import os
-import argparse
-import time
-import numpy as np
-import glob
-
 import torch
-import torch.nn as nn
+import torch.optim as optim
+from tqdm import tqdm
+import os 
+import argparse
+import random
+import numpy as np
+import logging 
 
-from Data import dataloaders
-from Models import models
-from Metrics import performance_metrics
-from Metrics import losses
+# --- IMPORT NECESSARY MODULES ---
+try:
+    from Models.model import FCBFormer
+except ImportError:
+    print("Error: Could not import FCBFormer from 'Models.model'. Please ensure 'model.py' is saved.")
+    exit(1)
+
+try:
+    from Data.dataloader import get_data_loaders
+except ImportError:
+    print("Error: Could not import get_data_loaders from 'Data/dataloader.py'. Please ensure the file is saved in 'Data/' directory.")
+    exit(1)
+
+try:
+    # Assuming the updated loss file is named losses.py
+    from Metrics.losses import DosePredictionLoss as CombinedLoss 
+except ImportError:
+    print("Error: Could not import CombinedLoss from 'Metrics/losses.py'. Please ensure the file is saved in 'Metrics/' directory.")
+    exit(1)
+    
+# Placeholder for device management
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 
 
-def train_epoch(model, device, train_loader, optimizer, epoch, Dice_loss, BCE_loss):
-    t = time.time()
+def setup_seed(seed):
+    """Set seeds for reproducibility."""
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="3D Conv Transformer Training")
+    # FIX: Setting default data_path to '..' (parent directory) to correctly locate 'overlaid-data'.
+    parser.add_argument('--data_path', type=str, default='..', help='Path to the directory containing overlaid-data folder.')
+    parser.add_argument('--epochs', type=int, default=2, help='Number of epochs to train')
+    parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--log_dir', type=str, default='./checkpoints', help='Directory to save logs and model checkpoints')
+    return parser.parse_args()
+
+def calculate_mae(output, target):
+    """
+    Calculates Mean Absolute Error (MAE) between prediction and target.
+    This serves as our primary 'accuracy' metric for regression.
+    """
+    # Calculate MAE across all elements
+    mae = torch.abs(output - target).mean()
+    return mae.item()
+
+def train_epoch(model, dataloader, criterion, optimizer, device):
+    """Runs a single training epoch, returning loss and MAE."""
     model.train()
-    loss_accumulator = []
-    for batch_idx, (data, target) in enumerate(train_loader):
-        data, target = data.to(device), target.to(device)
+    total_loss = 0
+    total_mae = 0
+    count = 0
+    
+    # X=Input (3ch), Y=Target Dose (1ch), Masks=10 Structure Masks
+    for X, Y, Masks in tqdm(dataloader, desc="Training"): 
+        X, Y, Masks = X.to(device), Y.to(device), Masks.to(device)
+        
         optimizer.zero_grad()
-        output = model(data)
-        loss = Dice_loss(output, target) + BCE_loss(torch.sigmoid(output), target)
+        output = model(X)
+        
+        # Calculate combined loss
+        loss = criterion(output, Y, Masks) 
         loss.backward()
         optimizer.step()
-        loss_accumulator.append(loss.item())
-        if batch_idx + 1 < len(train_loader):
-            print(
-                "\rTrain Epoch: {} [{}/{} ({:.1f}%)]\tLoss: {:.6f}\tTime: {:.6f}".format(
-                    epoch,
-                    (batch_idx + 1) * len(data),
-                    len(train_loader.dataset),
-                    100.0 * (batch_idx + 1) / len(train_loader),
-                    loss.item(),
-                    time.time() - t,
-                ),
-                end="",
-            )
-        else:
-            print(
-                "\rTrain Epoch: {} [{}/{} ({:.1f}%)]\tAverage loss: {:.6f}\tTime: {:.6f}".format(
-                    epoch,
-                    (batch_idx + 1) * len(data),
-                    len(train_loader.dataset),
-                    100.0 * (batch_idx + 1) / len(train_loader),
-                    np.mean(loss_accumulator),
-                    time.time() - t,
-                )
-            )
+        
+        total_loss += loss.item()
+        
+        # Calculate MAE (our 'accuracy' metric)
+        mae = calculate_mae(output, Y)
+        total_mae += mae
+        count += 1
+        
+    return total_loss / count, total_mae / count # Return both loss and MAE
 
-    return np.mean(loss_accumulator)
-
-
-@torch.no_grad()
-def test(model, device, test_loader, epoch, perf_measure):
-    t = time.time()
+def validate_epoch(model, dataloader, criterion, device):
+    """Runs a single validation epoch, returning loss and MAE."""
     model.eval()
-    perf_accumulator = []
-    for batch_idx, (data, target) in enumerate(test_loader):
-        data, target = data.to(device), target.to(device)
-        output = model(data)
-        perf_accumulator.append(perf_measure(output, target).item())
-        if batch_idx + 1 < len(test_loader):
-            print(
-                "\rTest  Epoch: {} [{}/{} ({:.1f}%)]\tAverage performance: {:.6f}\tTime: {:.6f}".format(
-                    epoch,
-                    batch_idx + 1,
-                    len(test_loader),
-                    100.0 * (batch_idx + 1) / len(test_loader),
-                    np.mean(perf_accumulator),
-                    time.time() - t,
-                ),
-                end="",
-            )
-        else:
-            print(
-                "\rTest  Epoch: {} [{}/{} ({:.1f}%)]\tAverage performance: {:.6f}\tTime: {:.6f}".format(
-                    epoch,
-                    batch_idx + 1,
-                    len(test_loader),
-                    100.0 * (batch_idx + 1) / len(test_loader),
-                    np.mean(perf_accumulator),
-                    time.time() - t,
-                )
-            )
-
-    return np.mean(perf_accumulator), np.std(perf_accumulator)
-
-
-def build(args):
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
-
-    if args.dataset == "Kvasir":
-        img_path = args.root + "images/*"
-        input_paths = sorted(glob.glob(img_path))
-        depth_path = args.root + "masks/*"
-        target_paths = sorted(glob.glob(depth_path))
-    elif args.dataset == "CVC":
-        img_path = args.root + "Original/*"
-        input_paths = sorted(glob.glob(img_path))
-        depth_path = args.root + "Ground Truth/*"
-        target_paths = sorted(glob.glob(depth_path))
-    train_dataloader, _, val_dataloader = dataloaders.get_dataloaders(
-        input_paths, target_paths, batch_size=args.batch_size
-    )
-
-    Dice_loss = losses.SoftDiceLoss()
-    BCE_loss = nn.BCELoss()
-
-    perf = performance_metrics.DiceScore()
-
-    model = models.FCBFormer()
-
-    if args.mgpu == "true":
-        model = nn.DataParallel(model)
-    model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-
-    return (
-        device,
-        train_dataloader,
-        val_dataloader,
-        Dice_loss,
-        BCE_loss,
-        perf,
-        model,
-        optimizer,
-    )
-
-
-def train(args):
-    (
-        device,
-        train_dataloader,
-        val_dataloader,
-        Dice_loss,
-        BCE_loss,
-        perf,
-        model,
-        optimizer,
-    ) = build(args)
-
-    if not os.path.exists("./Trained models"):
-        os.makedirs("./Trained models")
-
-    prev_best_test = None
-    if args.lrs == "true":
-        if args.lrs_min > 0:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, mode="max", factor=0.5, min_lr=args.lrs_min, verbose=True
-            )
-        else:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, mode="max", factor=0.5, verbose=True
-            )
-    for epoch in range(1, args.epochs + 1):
-        try:
-            loss = train_epoch(
-                model, device, train_dataloader, optimizer, epoch, Dice_loss, BCE_loss
-            )
-            test_measure_mean, test_measure_std = test(
-                model, device, val_dataloader, epoch, perf
-            )
-        except KeyboardInterrupt:
-            print("Training interrupted by user")
-            sys.exit(0)
-        if args.lrs == "true":
-            scheduler.step(test_measure_mean)
-        if prev_best_test == None or test_measure_mean > prev_best_test:
-            print("Saving...")
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": model.state_dict()
-                    if args.mgpu == "false"
-                    else model.module.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "loss": loss,
-                    "test_measure_mean": test_measure_mean,
-                    "test_measure_std": test_measure_std,
-                },
-                "Trained models/FCBFormer_" + args.dataset + ".pt",
-            )
-            prev_best_test = test_measure_mean
-
-
-def get_args():
-    parser = argparse.ArgumentParser(description="Train FCBFormer on specified dataset")
-    parser.add_argument("--dataset", type=str, required=True, choices=["Kvasir", "CVC"])
-    parser.add_argument("--data-root", type=str, required=True, dest="root")
-    parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--learning-rate", type=float, default=1e-4, dest="lr")
-    parser.add_argument(
-        "--learning-rate-scheduler", type=str, default="true", dest="lrs"
-    )
-    parser.add_argument(
-        "--learning-rate-scheduler-minimum", type=float, default=1e-6, dest="lrs_min"
-    )
-    parser.add_argument(
-        "--multi-gpu", type=str, default="false", dest="mgpu", choices=["true", "false"]
-    )
-
-    return parser.parse_args()
+    total_loss = 0
+    total_mae = 0
+    count = 0
+    
+    with torch.no_grad():
+        for X, Y, Masks in tqdm(dataloader, desc="Validation"):
+            X, Y, Masks = X.to(device), Y.to(device), Masks.to(device)
+            output = model(X)
+            
+            # Calculate combined loss
+            loss = criterion(output, Y, Masks)
+            total_loss += loss.item()
+            
+            # Calculate MAE (our 'accuracy' metric)
+            mae = calculate_mae(output, Y)
+            total_mae += mae
+            count += 1
+            
+    return total_loss / count, total_mae / count # Return both loss and MAE
 
 
 def main():
-    args = get_args()
-    train(args)
+    args = parse_args()
+    setup_seed(args.seed)
+
+    # --- Configuration ---
+    IN_CHANNELS = 3    
+    OUT_CHANNELS = 1   
+    INPUT_SIZE = 128
+    
+    ROOT_DATA_DIR = args.data_path
+
+    # --- CHECKPOINT CONFIGURATION ---
+    CHECKPOINT_DIR = args.log_dir
+    CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, 'best_model.pth')
+    
+    # Ensure the checkpoint directory exists
+    try:
+        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+        print(f"Checkpoint directory ensured: {os.path.abspath(CHECKPOINT_DIR)}")
+    except Exception as e:
+        print(f"Error creating checkpoint directory {CHECKPOINT_DIR}: {e}")
+        return
+    
+    # --- Data Loading (using actual loader) ---
+    try:
+        train_loader, val_loader = get_data_loaders(
+            ROOT_DATA_DIR, 
+            args.batch_size, 
+            num_workers=4 
+        )
+    except FileNotFoundError as e:
+        print(f"Data loading error. Check ROOT_DATA_DIR ('{ROOT_DATA_DIR}') and data structure. Error: {e}")
+        return
+
+    # --- Model, Loss, and Optimizer Initialization ---
+    model = FCBFormer(IN_CHANNELS, OUT_CHANNELS, INPUT_SIZE).to(device)
+    criterion = CombinedLoss().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
+    # --- Training Loop ---
+    print("Starting training...")
+    best_val_loss = float('inf')
+    metrics_history = [] # List to store per-epoch metrics
+
+    for epoch in range(1, args.epochs + 1):
+        print(f"\n--- Epoch {epoch}/{args.epochs} ---")
+        
+        # Train
+        train_loss, train_mae = train_epoch(model, train_loader, criterion, optimizer, device)
+        print(f"Training Loss: {train_loss:.4f} | Training MAE: {train_mae:.4f}")
+
+        # Validate
+        val_loss, val_mae = validate_epoch(model, val_loader, criterion, device)
+        print(f"Validation Loss: {val_loss:.4f} | Validation MAE: {val_mae:.4f}")
+
+        # Record metrics history
+        metrics_history.append({
+            'epoch': epoch,
+            'train_loss': train_loss,
+            'train_mae': train_mae,
+            'val_loss': val_loss,
+            'val_mae': val_mae,
+        })
+        
+        # Save best model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            try:
+                torch.save(model.state_dict(), CHECKPOINT_PATH)
+                print(f"Validation loss improved. Model saved to: {os.path.abspath(CHECKPOINT_PATH)}")
+            except Exception as e:
+                print(f"ERROR: Could not save model to {CHECKPOINT_PATH}. Reason: {e}")
+        else:
+            print("Validation loss did not improve.")
+
+    # --- Save Training History to File ---
+    history_file_path = os.path.join(CHECKPOINT_DIR, 'training_history.txt')
+    try:
+        with open(history_file_path, 'w') as f:
+            # Write header
+            f.write("Epoch\tTrain Loss\tTrain MAE\tVal Loss\tVal MAE\n")
+            # Write data
+            for m in metrics_history:
+                f.write(f"{m['epoch']}\t{m['train_loss']:.6f}\t{m['train_mae']:.6f}\t{m['val_loss']:.6f}\t{m['val_mae']:.6f}\n")
+        print(f"\nTraining history saved to: {os.path.abspath(history_file_path)}")
+    except Exception as e:
+        print(f"ERROR: Could not save training history to file. Reason: {e}")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
