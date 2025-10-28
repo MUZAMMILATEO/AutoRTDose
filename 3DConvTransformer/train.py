@@ -45,7 +45,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="3D Conv Transformer Training")
     # FIX: Setting default data_path to '..' (parent directory) to correctly locate 'overlaid-data'.
     parser.add_argument('--data_path', type=str, default='..', help='Path to the directory containing overlaid-data folder.')
-    parser.add_argument('--epochs', type=int, default=2, help='Number of epochs to train')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')

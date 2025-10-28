@@ -109,19 +109,19 @@ def visualize_prediction(pred_dose_np, patient_id):
     fig.suptitle(f'Predicted Dose Distribution for Patient: {patient_id}', fontsize=16)
 
     # 1. Axial View (D slice)
-    im0 = axes[0].imshow(axial_slice, cmap='viridis', origin='lower', vmax=vmax)
+    im0 = axes[0].imshow(axial_slice, cmap='jet', origin='lower', vmax=vmax)
     axes[0].set_title(f"Axial View (Z={center_D})")
     axes[0].set_xlabel("Width (W)")
     axes[0].set_ylabel("Height (H)")
     
     # 2. Coronal View (H slice)
-    im1 = axes[1].imshow(coronal_slice, cmap='viridis', origin='lower', vmax=vmax)
+    im1 = axes[1].imshow(coronal_slice, cmap='jet', origin='lower', vmax=vmax)
     axes[1].set_title(f"Coronal View (Y={center_H})")
     axes[1].set_xlabel("Width (W)")
     axes[1].set_ylabel("Depth (D)")
 
     # 3. Sagittal View (W slice)
-    im2 = axes[2].imshow(sagittal_slice, cmap='viridis', origin='lower', vmax=vmax)
+    im2 = axes[2].imshow(sagittal_slice, cmap='jet', origin='lower', vmax=vmax)
     axes[2].set_title(f"Sagittal View (X={center_W})")
     axes[2].set_xlabel("Height (H)")
     axes[2].set_ylabel("Depth (D)")
