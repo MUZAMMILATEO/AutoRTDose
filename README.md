@@ -1,6 +1,7 @@
 # 🩺 AutoRTDose: A _3D_ Transformer Framework for Automated Radiotherapy Segmentation and Dose Distribution Prediction
-  
+<p align="justify">
 Radiotherapy planning for head and neck cancer is a labour-intensive process that requires precise delineation of organs-at-risk (OARs) and the accurate estimation of dose distributions. Conventional deep learning pipelines often rely solely on convolutional neural networks, which struggle to capture the long-range spatial dependencies that influence clinical dose decisions. At the same time, fully 3D transformer models remain prohibitively expensive to train due to the high dimensionality of volumetric medical data. **AutoRTDose** addresses this challenge through a hybrid architecture that couples a **3D U-Net backbone** for rich spatial feature extraction with a **super-patch transformer module** designed to model contextual relationships across distant anatomical regions. The 3D U-Net efficiently captures fine-grained structural detail within the CT volume, while the transformer integrates global context by operating on learned super-patch embeddings rather than entire volumetric slices, significantly reducing computational overhead.
+</p>
 
 This design enables the framework to:
 
