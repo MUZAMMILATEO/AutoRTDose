@@ -1,8 +1,18 @@
 # 🩺 AutoRTDose: A _3D_ Transformer Framework for Automated Radiotherapy Segmentation and Dose Distribution Prediction
   
-AutoRTDose is a deep learning framework designed to automate the process of radiotherapy dose distribution prediction and anatomical structure segmentation. Built upon a 3D convolution–transformer hybrid architecture, the model leverages spatial attention and contextual encoding to capture both anatomical and dosimetric correlations from volumetric patient data.
+Radiotherapy planning for head and neck cancer is a labour-intensive process that requires precise delineation of organs-at-risk (OARs) and the accurate estimation of dose distributions. Conventional deep learning pipelines often rely solely on convolutional neural networks, which struggle to capture the long-range spatial dependencies that influence clinical dose decisions. At the same time, fully 3D transformer models remain prohibitively expensive to train due to the high dimensionality of volumetric medical data.
 
-This framework aims to accelerate clinical radiotherapy planning by reducing manual contouring time and improving dose accuracy, offering a scalable and reproducible solution for next-generation, AI-assisted treatment planning.
+**AutoRTDose** addresses this challenge through a hybrid architecture that couples a **3D U-Net backbone** for rich spatial feature extraction with a **super-patch transformer module** designed to model contextual relationships across distant anatomical regions. The 3D U-Net efficiently captures fine-grained structural detail within the CT volume, while the transformer integrates global context by operating on learned super-patch embeddings rather than entire volumetric slices, significantly reducing computational overhead.
+
+This design enables the framework to:
+
+**Automatically segment OARs and target structures** with clinically relevant precision;
+
+**Predict voxel-wise radiotherapy dose distributions** that maintain anatomical consistency;
+
+**Model long-range dose influence patterns**, particularly critical in head and neck treatment where steep gradients and complex organ interactions are common.
+
+AutoRTDose provides a scalable and practical foundation for advancing AI-assisted radiotherapy planning, supporting both research development and potential translation into clinical workflows.
 
  ![](read-me-images/pipeline.png)
 

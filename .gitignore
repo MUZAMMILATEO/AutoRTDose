@@ -8,6 +8,7 @@ submissions/
 # Model checkpoints
 3DConvTransformer/pvt_v2_b3.pth
 3DConvTransformer/checkpoints/
+3DConvTransformer/checkpoints_50/
 
 # Python cache and logs
 __pycache__/
