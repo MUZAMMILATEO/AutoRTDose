@@ -17,6 +17,20 @@ AutoRTDose provides a scalable and practical foundation for advancing AI-assiste
 
  ![](read-me-images/pipeline.png)
 
+ <div align="center">
+  <table>
+    <tr>
+      <td align="center"><img src="read-me-images/DVH.png" width="350px"></td>
+      <td align="center"><img src="read-me-images/GTvsPred.png" width="350px"></td>
+    </tr>
+    <tr>
+      <td align="center"><em>DVH Comparison</em></td>
+      <td align="center"><em>Ground Truth vs Predicted Dose Distribution</em></td>
+    </tr>
+  </table>
+</div>
+
+
 
 ---
 
