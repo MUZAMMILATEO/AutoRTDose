@@ -16,16 +16,14 @@ AutoRTDose provides a scalable and practical foundation for advancing AI-assiste
 </div>
 
  ![](read-me-images/pipeline.png)
- 
+
 <div align="center">
-  <img src="read-me-images/DVH.png" alt="DVH Comparison" width="70%">
-  <p><em>Figure: Dose–Volume Histogram comparison for ground truth vs predicted dose plan.</em></p>
+  <img src="read-me-images/DVH.png" alt="DVH Comparison" width="95%">
+  <p><em>Figure: Dose–Volume Histogram comparison between ground truth and predicted dose distribution.</em></p>
 
-  <img src="read-me-images/GTvsPred.png" alt="GT vs Predicted Dose Distribution" width="70%">
-  <p><em>Figure: Axial slice comparison showing spatial dose agreement.</em></p>
+  <img src="read-me-images/GTvsPred.png" alt="Ground Truth vs Predicted Dose Distribution" width="95%">
+  <p><em>Figure: Axial slice comparison showing spatial alignment between ground truth and predicted dose.</em></p>
 </div>
-
-
 
 
 ---
