@@ -6,6 +6,7 @@ import argparse
 import random
 import numpy as np
 import logging 
+from torch.cuda.amp import autocast, GradScaler
 
 # --- IMPORT NECESSARY MODULES ---
 try:
@@ -45,7 +46,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="3D Conv Transformer Training")
     # FIX: Setting default data_path to '..' (parent directory) to correctly locate 'overlaid-data'.
     parser.add_argument('--data_path', type=str, default='..', help='Path to the directory containing overlaid-data folder.')
-    parser.add_argument('--epochs', type=int, default=2, help='Number of epochs to train')
+    parser.add_argument('--epochs', type=int, default=20, help='Number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
@@ -54,18 +55,51 @@ def parse_args():
 
 def calculate_mae(output, target):
     """
-    Calculates Mean Absolute Error (MAE) between prediction and target.
-    This serves as our primary 'accuracy' metric for regression.
+    Calculates Global Mean Absolute Error (MAE) between prediction and target 
+    across all voxels.
     """
-    # Calculate MAE across all elements
     mae = torch.abs(output - target).mean()
     return mae.item()
 
-def train_epoch(model, dataloader, criterion, optimizer, device):
-    """Runs a single training epoch, returning loss and MAE."""
+def calculate_structure_mae(output, target, masks):
+    """
+    Calculates the Mean Absolute Error (MAE) only within PTV and OAR voxels.
+    This better reflects clinical performance since the loss prioritizes these regions.
+    """
+    # Create PTV mask union (Channels 0, 1, 2)
+    ptv_masks = masks[:, 0:3, ...] 
+    ptv_mask_union, _ = torch.max(ptv_masks, dim=1, keepdim=True)
+
+    # Create OAR mask union (Channels 3-9)
+    oar_masks = masks[:, 3:10, ...]
+    oar_mask_union, _ = torch.max(oar_masks, dim=1, keepdim=True)
+    
+    # Create the union of all critical structures (PTVs + OARs)
+    critical_structure_mask = (ptv_mask_union + oar_mask_union).bool()
+    
+    # Ensure there are voxels in the structures to avoid division by zero
+    num_voxels = torch.sum(critical_structure_mask).item()
+    if num_voxels == 0:
+        return 0.0
+
+    # Calculate absolute error map
+    abs_error = torch.abs(output - target)
+    
+    # Calculate total absolute error only inside the structures
+    structure_abs_error_sum = torch.sum(abs_error[critical_structure_mask])
+    
+    # Calculate MAE over the critical structures
+    structure_mae = structure_abs_error_sum / num_voxels
+    
+    return structure_mae.item()
+
+
+def train_epoch(model, dataloader, criterion, optimizer, device, scaler):
+    """Runs a single training epoch with mixed precision, returning loss and MAE."""
     model.train()
     total_loss = 0
-    total_mae = 0
+    total_global_mae = 0
+    total_structure_mae = 0 # New metric tracker
     count = 0
     
     # X=Input (3ch), Y=Target Dose (1ch), Masks=10 Structure Masks
@@ -73,44 +107,73 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
         X, Y, Masks = X.to(device), Y.to(device), Masks.to(device)
         
         optimizer.zero_grad()
-        output = model(X)
         
-        # Calculate combined loss
-        loss = criterion(output, Y, Masks) 
-        loss.backward()
-        optimizer.step()
+        # Forward pass with autocast
+        with autocast():
+            output = model(X)
+            
+            # Calculate combined loss
+            loss = criterion(output, Y, Masks) 
         
+        # Backward pass with scaler
+        scaler.scale(loss).backward()
+        
+        # Optimizer step
+        scaler.step(optimizer)
+        scaler.update()
+
+        # Using loss.item() from the unscaled loss for logging
         total_loss += loss.item()
         
-        # Calculate MAE (our 'accuracy' metric)
-        mae = calculate_mae(output, Y)
-        total_mae += mae
+        # Calculate Global MAE
+        global_mae = calculate_mae(output, Y)
+        total_global_mae += global_mae
+        
+        # Calculate Structure MAE (New metric)
+        structure_mae = calculate_structure_mae(output, Y, Masks)
+        total_structure_mae += structure_mae
+        
         count += 1
         
-    return total_loss / count, total_mae / count # Return both loss and MAE
+    return (
+        total_loss / count, 
+        total_global_mae / count, 
+        total_structure_mae / count # Return new metric
+    )
 
 def validate_epoch(model, dataloader, criterion, device):
     """Runs a single validation epoch, returning loss and MAE."""
     model.eval()
     total_loss = 0
-    total_mae = 0
+    total_global_mae = 0
+    total_structure_mae = 0 # New metric tracker
     count = 0
     
     with torch.no_grad():
-        for X, Y, Masks in tqdm(dataloader, desc="Validation"):
-            X, Y, Masks = X.to(device), Y.to(device), Masks.to(device)
-            output = model(X)
+        with autocast(): # Use autocast for faster validation/inference
+            for X, Y, Masks in tqdm(dataloader, desc="Validation"):
+                X, Y, Masks = X.to(device), Y.to(device), Masks.to(device)
+                output = model(X)
+                
+                # Calculate combined loss
+                loss = criterion(output, Y, Masks)
+                total_loss += loss.item()
+                
+                # Calculate Global MAE
+                global_mae = calculate_mae(output, Y)
+                total_global_mae += global_mae
+                
+                # Calculate Structure MAE (New metric)
+                structure_mae = calculate_structure_mae(output, Y, Masks)
+                total_structure_mae += structure_mae
+                
+                count += 1
             
-            # Calculate combined loss
-            loss = criterion(output, Y, Masks)
-            total_loss += loss.item()
-            
-            # Calculate MAE (our 'accuracy' metric)
-            mae = calculate_mae(output, Y)
-            total_mae += mae
-            count += 1
-            
-    return total_loss / count, total_mae / count # Return both loss and MAE
+    return (
+        total_loss / count, 
+        total_global_mae / count, 
+        total_structure_mae / count # Return new metric
+    )
 
 
 def main():
@@ -118,8 +181,8 @@ def main():
     setup_seed(args.seed)
 
     # --- Configuration ---
-    IN_CHANNELS = 3    
-    OUT_CHANNELS = 1   
+    IN_CHANNELS = 3     
+    OUT_CHANNELS = 1 
     INPUT_SIZE = 128
     
     ROOT_DATA_DIR = args.data_path
@@ -151,6 +214,9 @@ def main():
     model = FCBFormer(IN_CHANNELS, OUT_CHANNELS, INPUT_SIZE).to(device)
     criterion = CombinedLoss().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    
+    # Initialize GradScaler for Mixed Precision
+    scaler = GradScaler() 
 
     # --- Training Loop ---
     print("Starting training...")
@@ -160,24 +226,30 @@ def main():
     for epoch in range(1, args.epochs + 1):
         print(f"\n--- Epoch {epoch}/{args.epochs} ---")
         
-        # Train
-        train_loss, train_mae = train_epoch(model, train_loader, criterion, optimizer, device)
-        print(f"Training Loss: {train_loss:.4f} | Training MAE: {train_mae:.4f}")
+        # Train: Now returns Global MAE and Structure MAE
+        train_loss, train_global_mae, train_structure_mae = train_epoch(
+            model, train_loader, criterion, optimizer, device, scaler
+        )
+        print(f"Training Loss: {train_loss:.4f} | Global MAE: {train_global_mae:.4f} | Structure MAE: {train_structure_mae:.4f}")
 
-        # Validate
-        val_loss, val_mae = validate_epoch(model, val_loader, criterion, device)
-        print(f"Validation Loss: {val_loss:.4f} | Validation MAE: {val_mae:.4f}")
+        # Validate: Now returns Global MAE and Structure MAE
+        val_loss, val_global_mae, val_structure_mae = validate_epoch(
+            model, val_loader, criterion, device
+        )
+        print(f"Validation Loss: {val_loss:.4f} | Global MAE: {val_global_mae:.4f} | Structure MAE: {val_structure_mae:.4f}")
 
         # Record metrics history
         metrics_history.append({
             'epoch': epoch,
             'train_loss': train_loss,
-            'train_mae': train_mae,
+            'train_global_mae': train_global_mae, # Updated key
+            'train_structure_mae': train_structure_mae, # New key
             'val_loss': val_loss,
-            'val_mae': val_mae,
+            'val_global_mae': val_global_mae, # Updated key
+            'val_structure_mae': val_structure_mae, # New key
         })
         
-        # Save best model
+        # Save best model based on validation loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             try:
@@ -193,10 +265,13 @@ def main():
     try:
         with open(history_file_path, 'w') as f:
             # Write header
-            f.write("Epoch\tTrain Loss\tTrain MAE\tVal Loss\tVal MAE\n")
+            f.write("Epoch\tTrain Loss\tTrain Global MAE\tTrain Structure MAE\tVal Loss\tVal Global MAE\tVal Structure MAE\n")
             # Write data
             for m in metrics_history:
-                f.write(f"{m['epoch']}\t{m['train_loss']:.6f}\t{m['train_mae']:.6f}\t{m['val_loss']:.6f}\t{m['val_mae']:.6f}\n")
+                f.write(
+                    f"{m['epoch']}\t{m['train_loss']:.6f}\t{m['train_global_mae']:.6f}\t{m['train_structure_mae']:.6f}\t"
+                    f"{m['val_loss']:.6f}\t{m['val_global_mae']:.6f}\t{m['val_structure_mae']:.6f}\n"
+                )
         print(f"\nTraining history saved to: {os.path.abspath(history_file_path)}")
     except Exception as e:
         print(f"ERROR: Could not save training history to file. Reason: {e}")

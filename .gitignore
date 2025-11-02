@@ -9,6 +9,13 @@ submissions/
 3DConvTransformer/pvt_v2_b3.pth
 3DConvTransformer/checkpoints/
 3DConvTransformer/checkpoints_50/
+3DConvTransformer/checkpoints_100/
+3DConvTransformer/checkpoints_sample_100_plain_xyz_loss_3and7ch/
+3DConvTransformer/checkpoints_sample_100_plain_z_loss_2ch/
+3DConvTransformer/checkpoints_sample_200_plain_xyz_loss_2ch/
+3DConvTransformer/checkpoints_sample_20_plain_xyz_loss_3and7ch_dvh/
+3DConvTransformer/checkpoints_sample_50_plain_xyz_loss_3and7ch_dvh/
+3DConvTransformer/checkpoints_sample_50_plain_z_loss_2ch/
 
 # Python cache and logs
 __pycache__/
