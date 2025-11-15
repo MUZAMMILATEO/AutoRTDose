@@ -7,117 +7,138 @@ class DosePredictionLoss(nn.Module):
     Custom loss function for dose prediction, combining:
     1. Global MSE (L_global)
     2. Hierarchical Weighted MSE for PTVs and OARs (L_ptv, L_oar)
-    3. DVH-based Loss (L_dvh) for volumetric constraint matching.
-    
-    This provides strong spatial accuracy while optimizing for clinical DVH goals.
-    The DVH loss now uses a differentiable soft step approximation with vectorized bin calculation.
+    3. DVH-based Loss (L_dvh) for volumetric constraint matching (LEVEL MATCHING).
+    4. NEW: DVH Gradient Loss (L_dvh_grad) for DVH curve shape matching.
+    5. Gradient Matching Loss (L_gradient) for dose sharpness (SPATIAL GRADIENT).
     """
-    def __init__(self, ptv_weight=3.0, oar_weight=1.5, dvh_weight=0.5, num_bins=60, tau=1.0):
+    def __init__(self, ptv_weight=0.05, oar_weight=0.2, dvh_weight=50.0, 
+                 dvh_grad_weight=200.0, # <-- NEW HYPERPARAMETER for DVH gradient
+                 gradient_weight=500.0, 
+                 num_bins=60, tau=1.0):
         super().__init__()
         
         # Primary loss function (used for L_global and spatial weighted loss)
         self.mse_loss = nn.MSELoss(reduction='none') 
-        self.mae_loss = nn.L1Loss() # Used for the DVH loss component
+        self.mae_loss = nn.L1Loss() # Used for the DVH and Gradient loss components
         
         # Hyperparameters
         self.ptv_weight = ptv_weight
         self.oar_weight = oar_weight
-        self.dvh_weight = dvh_weight # New weight for DVH component
-        self.num_bins = num_bins     # Resolution of the DVH curve
-        self.tau = tau               # Smoothing temperature for the soft-step DVH loss
+        self.dvh_weight = dvh_weight 
+        self.dvh_grad_weight = dvh_grad_weight # <-- NEW
+        self.gradient_weight = gradient_weight 
+        self.num_bins = num_bins 
+        self.tau = tau 
         
-        print(f"DosePredictionLoss initialized with PTV Weight: {ptv_weight}, OAR Weight: {oar_weight}, DVH Weight: {dvh_weight}, Tau: {tau}")
+        print(f"DosePredictionLoss initialized with PTV Weight: {ptv_weight}, OAR Weight: {oar_weight}, DVH Weight: {dvh_weight}, DVH Grad Weight: {dvh_grad_weight}, Gradient Weight: {gradient_weight}, Tau: {tau}")
 
     def _calculate_dvh_loss(self, output, target, masks):
         """
-        Calculates the Mean Absolute Error (MAE) between predicted and target DVHs 
-        for all 10 structures using a vectorized, differentiable soft step function.
+        Calculates the Mean Absolute Error (MAE) for both the DVH curve level and its gradient.
+        Returns: L_dvh_normalized (level matching), L_dvh_grad_normalized (shape matching)
         """
         batch_size, _, D, H, W = output.shape
         total_dvh_loss = 0.0
+        total_dvh_grad_loss = 0.0 # <-- NEW
         
-        # Find the max dose to define the histogram range (up to 80 Gy, common max dose)
         max_dose = 80.0
-        # Histogram bins (dose levels)
         dose_bins = torch.linspace(0.0, max_dose, self.num_bins, device=output.device)
 
-        # We iterate over all 10 structure masks (channels 0 through 9)
         for i in range(10):
-            # 1. Isolate the current structure mask (N, 1, D, H, W)
             structure_mask = masks[:, i:i+1, ...]
             
-            # Skip if the structure is empty (no voxels)
             if torch.sum(structure_mask).item() < 1:
                 continue
 
-            # 2. Extract dose values for the structure (N, V, 1) where V is num voxels
             pred_doses = output[structure_mask.bool()].flatten()
             target_doses = target[structure_mask.bool()].flatten()
             
-            # Function to calculate approximate Volume (Cumulative Histogram) - NOW VECTORIZED
             def get_approx_dvh(doses):
                 num_doses = len(doses)
                 if num_doses == 0:
-                    return torch.zeros(self.num_bins, device=output.device)
+                    # Return all zeros, but ensure it has the correct number of bins
+                    return torch.zeros(self.num_bins, device=output.device) 
                 
-                # Reshape for broadcasting: doses (V, 1), dose_bins (1, B)
                 doses_v = doses.view(-1, 1)
                 bins_b = dose_bins.view(1, -1)
                 
-                # Calculate soft step indicator for ALL voxels (V) against ALL bins (B)
-                # broadcasted_diff shape: (V, B)
                 broadcasted_diff = doses_v - bins_b
-                
-                # soft_volume_indicator shape: (V, B)
-                # Uses the differentiable soft step approximation: sigmoid((doses - bin_val) / self.tau)
                 soft_volume_indicator = torch.sigmoid(broadcasted_diff / self.tau)
-                
-                # Sum over the voxel dimension (dim=0) and normalize (Dose-Volume Histogram curve)
-                # dvh_curve shape: (B)
                 dvh_curve = torch.sum(soft_volume_indicator, dim=0) / num_doses
-                    
                 return dvh_curve
 
-            # Calculate predicted and target DVH curves (each is a tensor of size num_bins)
             pred_dvh = get_approx_dvh(pred_doses)
             target_dvh = get_approx_dvh(target_doses)
             
-            # 4. Calculate loss as MAE between the two DVH curves
+            # 1. DVH Level Loss (MAE)
             dvh_loss_structure = self.mae_loss(pred_dvh, target_dvh)
             total_dvh_loss += dvh_loss_structure
+            
+            # 2. DVH Gradient Loss (Shape Matching) <-- NEW
+            # torch.diff calculates the finite difference (slope)
+            # The length of the gradient is num_bins - 1
+            pred_dvh_grad = torch.diff(pred_dvh) 
+            target_dvh_grad = torch.diff(target_dvh)
+            
+            dvh_grad_loss_structure = self.mae_loss(pred_dvh_grad, target_dvh_grad)
+            total_dvh_grad_loss += dvh_grad_loss_structure
 
-        # Average the DVH loss across all structures
-        L_dvh_normalized = total_dvh_loss / 10.0 # Divide by 10 (the number of channels)
+        L_dvh_normalized = total_dvh_loss / 10.0
+        L_dvh_grad_normalized = total_dvh_grad_loss / 10.0 # Normalize by the number of structures (10)
 
-        return L_dvh_normalized
+        return L_dvh_normalized, L_dvh_grad_normalized # <-- TWO RETURNS
+
+    def _calculate_gradient_loss(self, output, target):
+        """
+        Calculates L1 loss on the first-order gradients (dose sharpness) 
+        using simple 3D finite difference kernels.
+        """
+        # Note: Input/Output are (N, C=1, D, H, W)
+        
+        # 1. Define 1D finite difference kernels for D, H, W axes
+        k = torch.tensor([-1., 1.], dtype=output.dtype, device=output.device).view(1, 1, 2)
+        
+        kernel_D = k.view(1, 1, 2, 1, 1)
+        kernel_H = k.view(1, 1, 1, 2, 1)
+        kernel_W = k.view(1, 1, 1, 1, 2)
+
+        # 2. Calculate Gradients for Prediction and Target
+        grad_D_pred = F.conv3d(output, kernel_D)
+        grad_D_target = F.conv3d(target, kernel_D)
+        
+        grad_H_pred = F.conv3d(output, kernel_H)
+        grad_H_target = F.conv3d(target, kernel_H)
+        
+        grad_W_pred = F.conv3d(output, kernel_W)
+        grad_W_target = F.conv3d(target, kernel_W)
+
+        # 3. Calculate L1 Loss on the magnitude of the gradients for each axis
+        loss_D = self.mae_loss(torch.abs(grad_D_pred), torch.abs(grad_D_target))
+        loss_H = self.mae_loss(torch.abs(grad_H_pred), torch.abs(grad_H_target))
+        loss_W = self.mae_loss(torch.abs(grad_W_pred), torch.abs(grad_W_target))
+
+        # 4. Total Gradient Loss (Averaged over 3 axes)
+        L_gradient = (loss_D + loss_H + loss_W) / 3.0
+        
+        return L_gradient
 
     def forward(self, output, target, masks):
         """
-        Calculates the weighted dose prediction loss using separate PTV and OAR weights 
-        and the DVH matching component.
+        Calculates the full weighted dose prediction loss.
         """
         
         # --- 1. Calculate Base Loss (MSE per voxel) ---
         mse_map = self.mse_loss(output, target)
-        
-        # --- 2. L_global: Unweighted MSE over the entire volume ---
         L_global = torch.mean(mse_map)
         
-        # --- 3. Create Hierarchical Masks (for spatial weighting) ---
-        
-        # A. PTV Mask (Channels 0, 1, 2)
+        # --- 2. Calculate Hierarchical Weighted Spatial Losses (L_ptv, L_oar) ---
         ptv_masks = masks[:, 0:3, ...] 
         ptv_mask_union, _ = torch.max(ptv_masks, dim=1, keepdim=True)
-
-        # B. OAR Mask (Channels 3-9)
+        
         oar_masks = masks[:, 3:10, ...]
         oar_mask_union, _ = torch.max(oar_masks, dim=1, keepdim=True)
-
-        # C. OAR-only Mask (OAR union excluding PTV voxels)
         oar_only_mask = oar_mask_union * (1 - ptv_mask_union)
-        
-        # --- 4. Calculate Normalized Weighted Spatial Losses (L_ptv, L_oar) ---
-        
+
         # L_ptv
         L_ptv_weighted = torch.sum(mse_map * ptv_mask_union) * self.ptv_weight
         num_ptv_voxels = torch.sum(ptv_mask_union) + 1e-6
@@ -128,14 +149,35 @@ class DosePredictionLoss(nn.Module):
         num_oar_voxels = torch.sum(oar_only_mask) + 1e-6
         L_oar_normalized = L_oar_weighted / num_oar_voxels
         
-        # --- 5. Calculate DVH-based Loss (L_dvh) ---
-        
-        # L_dvh is weighted by dvh_weight
-        L_dvh = self._calculate_dvh_loss(output, target, masks) * self.dvh_weight
+        # --- 3. Calculate DVH-based Losses (L_dvh_level, L_dvh_grad) ---
+        L_dvh_base, L_dvh_grad_base = self._calculate_dvh_loss(output, target, masks) # <-- Captures TWO terms
 
-        # --- 6. Total Loss ---
-        # L_global covers the background, L_ptv/L_oar prioritize critical regions spatially, 
-        # and L_dvh ensures the overall dose volume statistics are met.
-        total_loss = L_global + L_ptv_normalized + L_oar_normalized + L_dvh
+        L_dvh_level = L_dvh_base * self.dvh_weight
+        L_dvh_grad = L_dvh_grad_base * self.dvh_grad_weight # <-- NEW WEIGHTED TERM
+
+        # --- 4. Calculate Gradient Matching Loss (L_gradient) ---
+        L_gradient = self._calculate_gradient_loss(output, target) * self.gradient_weight
         
+        # --- 5. Total Loss ---
+        total_loss = L_global + L_ptv_normalized + L_oar_normalized + L_dvh_level + L_dvh_grad + L_gradient # <-- L_dvh_grad included
+    
+        # Collect all contributions
+        # contributions = {
+        #     "L_global": L_global,
+        #     "L_ptv_normalized": L_ptv_normalized,
+        #     "L_oar_normalized": L_oar_normalized,
+        #     "L_dvh_level": L_dvh_level,
+        #     "L_dvh_grad": L_dvh_grad,
+        #     "L_gradient": L_gradient
+        # }
+
+        # total_loss_value = total_loss.item()
+
+        # print("\n--- Loss Contributions (%) ---")
+        # for name, loss_tensor in contributions.items():
+        #     # Convert tensor value to float and calculate percentage
+        #     percentage = (loss_tensor.item() / 1.0) * 1.0
+        #     print(f"  {name}: {percentage:.2f}")
+        # print("------------------------------\n")
+
         return total_loss
